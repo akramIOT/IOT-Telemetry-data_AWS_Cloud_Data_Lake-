@@ -1,0 +1,1900 @@
+{
+	"AWSTemplateFormatVersion" : "2010-09-09", 
+	"Description" : "Ingesting and analyzing legacy IoT data sources using AWS Step Functions, AWS IoT Analytics and AWS IoT Events. Author : sheriff.akram.usa@gmail.com, 
+	"Parameters": {
+		  "EMail": {
+			"Description": "EMail address to notify if there are missing KPI's records",
+			"Type": "String",
+			"AllowedPattern": "([a-zA-Z0-9_\\-\\.]+)@((\\[[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.)|(([a-zA-Z0-9\\-]+\\.)+))([a-zA-Z]{2,4}|[0-9]{1,3})(\\]?)",
+		  "ConstraintDescription": "must be a valid email address."
+		}
+	},  
+	"Resources": { 
+		"SNSTopicMessagesFromIoTEvents":{
+			"Type" : "AWS::SNS::Topic",
+			"Properties" : { 
+				"DisplayName" : {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "MessagesFromIoTEvents"]]}, 
+				"TopicName" : {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "MessagesFromIoTEvents"]]}
+			  }
+		  },
+		 "SNSSubscriptionMessagesFromIoTEvents":{
+			"Type" : "AWS::SNS::Subscription",
+			"DependsOn": [
+				"SNSTopicMessagesFromIoTEvents" 
+			  ],
+			"Properties" : {
+				"Endpoint" : { "Ref" : "EMail" },
+				"Protocol" : "Email",
+				"TopicArn" : {"Ref": "SNSTopicMessagesFromIoTEvents"}
+			  }
+		  }, 
+		  "S3BucketRawData": {
+				"Type": "AWS::S3::Bucket",
+				"DeletionPolicy": "Delete",
+				"Properties": {
+					"BucketName": {"Fn::Join": ["",[ {"Ref": "AWS::StackName"}, "s3incomingdata"]]},
+					"LifecycleConfiguration": {
+						"Rules": [
+						{
+							"Id": "DeleteEverythingIn1Day",
+							"Prefix": "",
+							"Status": "Enabled",
+							"ExpirationInDays": "1"
+						}
+						]
+					}
+				}
+			} ,
+		    "LogBucketPolicy": {
+				"Type": "AWS::S3::BucketPolicy",
+				"DependsOn": [
+					"S3BucketRawData"
+				  ],
+				"Properties": {
+				  "Bucket": {
+						  "Ref": "S3BucketRawData"
+				  },
+				  "PolicyDocument": {
+					"Version": "2012-10-17",
+					"Statement": [
+					  {
+						"Sid": "AWSCloudTrailAclCheck",
+						"Effect": "Allow",
+						"Principal": {
+						  "Service": "cloudtrail.amazonaws.com"
+						},
+						"Action": "s3:GetBucketAcl",
+						"Resource": { "Fn::Join": ["",[ "arn:aws:s3:::", {"Ref": "S3BucketRawData" }]]}
+					  },
+					  {
+						"Sid": "AWSCloudTrailWrite",
+						"Effect": "Allow",
+						"Principal": {
+						  "Service": "cloudtrail.amazonaws.com"
+						},
+						"Action": "s3:PutObject",
+						"Resource": {
+						  "Fn::Join": [ "", [ "arn:aws:s3:::",  { "Ref": "S3BucketRawData"  },  "/AWSLogs/",{"Ref": "AWS::AccountId"} , "/*" ] ]
+						},
+						"Condition": {
+						  "StringEquals": {
+							"s3:x-amz-acl": "bucket-owner-full-control"
+						  }
+						}
+					  }
+					]
+				  }
+				}
+			  },  
+			  "CloudTrailS3EventRawData":{
+				"Type" : "AWS::CloudTrail::Trail",
+				"DependsOn": [
+					"LogBucketPolicy" 
+				  ],
+				"Properties" : { 
+					"S3BucketName" :  {"Ref": "S3BucketRawData"},
+					"TrailName" : {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "CloudTrail_RawData"]]},
+					"IsLogging" : true,
+					"EventSelectors" : [ {
+						"DataResources" : [ {
+							"Type" : "AWS::S3::Object",
+							"Values" : [ {"Fn::Join": ["",["arn:aws:s3:::", {"Fn::Join": ["",[ {"Ref": "AWS::StackName"}, "s3incomingdata"]]},"/raw"]]} ]
+						  }],
+						"ReadWriteType" : "WriteOnly"
+					  }]
+					}
+				}, 
+		"LambdaFormatIncomingFileToJSON" : {
+			"Type" : "AWS::Lambda::Function",
+			"Properties" : {
+			 "FunctionName" : {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "Lambda_FormatIncomingFileToJSON"]]},
+				"Handler" : "index.lambda_handler",
+				"Code" : { 
+					"ZipFile" :{"Fn::Join":[
+										 "\n",
+										 [
+                                            "import json",
+                                            "import boto3",
+                                            "import os",
+                                            "s3 = boto3.client('s3')",
+                                            "def lambda_handler(event, context):",
+                                            "   for item in event['detail']['resources']:",
+                                            "       if item['type']=='AWS::S3::Object':",
+                                            "           key=item['ARN'].split('/')[1] + '/' + item['ARN'].split('/')[2]",
+                                            "       if item['type']=='AWS::S3::Bucket':",
+                                            "           bucket=item['ARN'].split(':')[5]",
+                                            "   objget = s3.get_object(Bucket=bucket, Key=key)",
+                                            "   jsonobject = {'kpirecords':[]}",
+                                            "   fileformatvalid=True",
+                                            "   for line in objget['Body'].read().decode('utf-8').splitlines():",
+                                            "       arr =line.split(';')",
+                                            "       if len(arr) == 4 :",
+                                            "           jsonobject['kpirecords'].append({'datetime' : arr[0], 'productionid' : arr[1], 'assetid' : arr[2], 'metric' : arr[3]})",
+                                            "       else :",
+                                            "           fileformatvalid=False",
+                                            "   keyjson = key.replace('raw/','json/').replace('.csv','.json')",
+                                            "   objput = s3.put_object(",
+                                            "       Bucket= bucket,", 
+                                            "       Key= keyjson,", 
+                                            "       Body=json.dumps(jsonobject).encode('utf-8'))",
+                                            "   return {",
+                                            "       'FileFormatValid': fileformatvalid,",
+                                            "       'JSONS3Bucket': bucket,",
+                                            "       'JSONS3Key': keyjson,",
+                                            "       'RawDataS3Bucket': bucket,",
+                                            "       'RawDataS3Key': key,",
+											"}"
+										  ]
+									   ]
+						   }
+				},
+				"Environment" : { },
+				"Role"    : { "Fn::GetAtt": [ "IAMRoleFormatIncomingFileToJSON", "Arn"]},
+				"Runtime" : "python3.8",
+				"Timeout" : 3
+			}
+		} ,
+		"IAMRoleFormatIncomingFileToJSON": {
+			 "Type": "AWS::IAM::Role",
+			 "DependsOn": [
+				"IoTAnalyticsChannelKPI"
+			  ],
+			 "Properties": {
+			   "RoleName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMRole_FormatIncomingFileToJSON"]]},
+			   "AssumeRolePolicyDocument": {
+				 "Version": "2012-10-17",
+				 "Statement": [
+				   {
+					 "Effect": "Allow",
+					 "Principal": {
+					   "Service": [
+						 "lambda.amazonaws.com"
+					   ]
+					 },
+					 "Action": [
+					   "sts:AssumeRole"
+					 ]
+				   }
+				 ]
+			   },
+			   "Path": "/"
+			}
+		},
+		"IAMPolicyFormatIncomingFileToJSONS3GetPutObject": {
+			"Type": "AWS::IAM::Policy",
+			"Properties": {				 
+				   "PolicyName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_FormatIncomingFileToJSON_IoTAnalyticsBatchPutMessage"]]},
+				   "PolicyDocument": {
+						"Version": "2012-10-17",
+						"Statement": [
+                            {
+                                "Sid": "VisualEditor0",
+                                "Effect": "Allow",
+                                "Action": "s3:GetObject",
+                                "Resource": {"Fn::Join": ["",["arn:aws:s3:::", {"Fn::Join": ["",[ {"Ref": "AWS::StackName"}, "s3incomingdata"]]},"/raw/*"]]}
+                            },
+                            {
+                                "Sid": "VisualEditor1",
+                                "Effect": "Allow",
+                                "Action": "s3:PutObject",
+                                "Resource": {"Fn::Join": ["",["arn:aws:s3:::", {"Fn::Join": ["",[ {"Ref": "AWS::StackName"}, "s3incomingdata"]]},"/json/*"]]}
+                            }
+						]
+				   },
+				   "Roles": [
+					   {
+						   "Ref": "IAMRoleFormatIncomingFileToJSON"
+					   }
+				   ]
+				 } 
+			 },
+		"IAMPolicyFormatIncomingFileToJSONCloudWatchLogs": {
+			"Type": "AWS::IAM::Policy", 
+			"Properties": {				 
+					"PolicyName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_FormatIncomingFileToJSON_CloudWatchLogs"]]},
+					"PolicyDocument": {
+						"Version": "2012-10-17",
+						"Statement": [
+						{
+							"Effect": "Allow",
+							"Action":  "logs:CreateLogGroup",
+							"Resource": {"Fn::Join": ["",["arn:aws:logs:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"} ,":*"]]}
+						},
+						{
+							"Effect": "Allow",
+							"Action": [ "logs:CreateLogStream",
+										"logs:PutLogEvents" ],
+							"Resource": {"Fn::Join": ["",["arn:aws:logs:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"} ,":log-group:/aws/lambda/", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "Lambda_FormatIncomingFileToJSON"]]},":*"]]}
+						}
+						]
+					},
+					"Roles": [
+						{
+							"Ref": "IAMRoleFormatIncomingFileToJSON"
+						}
+					]
+					} 
+				},	
+		"LambdaFormatAndCheckDataConsistency" : {
+			"Type" : "AWS::Lambda::Function",
+			"Properties" : {
+				"FunctionName" : {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "Lambda_FormatAndCheckDataConsistency"]]},
+				"Handler" : "index.lambda_handler",
+				"Code" : { 
+					"ZipFile" :{"Fn::Join":[
+											"\n",
+											[
+												"import json",
+												"import boto3", 
+												"from datetime import datetime",
+												"def lambda_handler(event, context):",
+										    	"    s3 = boto3.client('s3')",
+												"    jsonobject = {}",
+												"    bucket = event['JSONS3Bucket']",
+												"    key = event['JSONS3Key']",
+												"    dataformatvalid = True",
+												"    objget = s3.get_object(Bucket=bucket, Key=key)",
+												"    jsonobject = json.loads(objget['Body'].read().decode('utf-8'))",
+												"    for i in range(0,len(jsonobject['kpirecords'])-1):",
+												"        if dataformatvalid==True :",
+												"            try:",
+												"                dt=jsonobject['kpirecords'][i]['datetime']",
+												"                jsonobject['kpirecords'][i]['timestamp'] = int((datetime(int(dt[0:4]),int(dt[5:7]),int(dt[8:10]),int(dt[11:13]),int(dt[14:16]),int(dt[17:19]),0)).timestamp())",
+												"            except ValueError:",
+												"                dataformatvalid=False",  
+												"            try:",
+												"                jsonobject['kpirecords'][i]['metric'] = round(float(jsonobject['kpirecords'][i]['metric']),2)",   
+												"            except ValueError:",
+												"                dataformatvalid=False",
+												"    buckettransformedjson = bucket",
+												"    keytransformedjson = key.replace('json/','transformedjson/').replace('.json','transformed.json')",
+												"    objput = s3.put_object(",
+												"        Bucket= buckettransformedjson,",
+												"        Key= keytransformedjson,", 
+												"        Body=json.dumps(jsonobject).encode('utf-8'))",
+												"    return {",
+												"            'DataFormatValid': dataformatvalid,",
+												"            'FormatedJSONS3Bucket': buckettransformedjson,",
+												"            'FormatedJSONS3Key': keytransformedjson,",
+												"            'JSONS3Bucket': bucket,",
+												"            'JSONS3Key': key,",
+												"            }"
+											]
+										]
+							}
+				},
+				"Environment" : { },
+				"Role"    : { "Fn::GetAtt": [ "IAMRoleFormatAndCheckDataConsistency", "Arn"]},
+				"Runtime" : "python3.8",
+				"Timeout" : 3
+			}
+		} ,
+		"IAMRoleFormatAndCheckDataConsistency": {
+				"Type": "AWS::IAM::Role",
+				"Properties": {
+				"RoleName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMRole_FormatAndCheckDataConsistency"]]},
+				"AssumeRolePolicyDocument": {
+					"Version": "2012-10-17",
+					"Statement": [
+					{
+						"Effect": "Allow",
+						"Principal": {
+						"Service": [
+							"lambda.amazonaws.com"
+						]
+						},
+						"Action": [
+						"sts:AssumeRole"
+						]
+					}
+					]
+				},
+				"Path": "/"
+			}
+		},
+		"IAMPolicyFormatAndCheckDataConsistencyS3GetPutObject": {
+			"Type": "AWS::IAM::Policy",
+			"Properties": {				 
+					"PolicyName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_FormatAndCheckDataConsistencyS3GetPutObject"]]},
+					"PolicyDocument": {
+						"Version": "2012-10-17",
+						"Statement": [
+							{
+								"Sid": "VisualEditor0",
+								"Effect": "Allow",
+								"Action": "s3:GetObject",
+								"Resource": {"Fn::Join": ["",["arn:aws:s3:::", {"Fn::Join": ["",[ {"Ref": "AWS::StackName"}, "s3incomingdata"]]},"/json/*"]]}
+							},
+							{
+								"Sid": "VisualEditor1",
+								"Effect": "Allow",
+								"Action": "s3:PutObject",
+								"Resource": {"Fn::Join": ["",["arn:aws:s3:::", {"Fn::Join": ["",[ {"Ref": "AWS::StackName"}, "s3incomingdata"]]},"/transformedjson/*"]]}
+							}
+						]
+					},
+					"Roles": [
+						{
+							"Ref": "IAMRoleFormatAndCheckDataConsistency"
+						}
+					]
+					} 
+				},
+		"IAMPolicyFormatAndCheckDataConsistencyCloudWatchLogs": {
+			"Type": "AWS::IAM::Policy", 
+			"Properties": {				 
+					"PolicyName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_FormatAndCheckDataConsistencyCloudWatchLog"]]},
+					"PolicyDocument": {
+						"Version": "2012-10-17",
+						"Statement": [
+						{
+							"Effect": "Allow",
+							"Action":  "logs:CreateLogGroup",
+							"Resource": {"Fn::Join": ["",["arn:aws:logs:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"} ,":*"]]}
+						},
+						{
+							"Effect": "Allow",
+							"Action": [ "logs:CreateLogStream",
+										"logs:PutLogEvents" ],
+							"Resource": {"Fn::Join": ["",["arn:aws:logs:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"} ,":log-group:/aws/lambda/", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "Lambda_FormatAndCheckDataConsistency"]]},":*"]]}
+						}
+						]
+					},
+					"Roles": [
+						{
+							"Ref": "IAMRoleFormatAndCheckDataConsistency"
+						}
+					]
+					} 
+				},	
+		"LambdaPutDataToIoTAnalytics" : {
+			"Type" : "AWS::Lambda::Function",
+			"Properties" : {
+				"FunctionName" : {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "Lambda_PutDataToIoTAnalytics"]]},
+				"Handler" : "index.lambda_handler",
+				"Code" : { 
+					"ZipFile" :{"Fn::Join":[
+											"\n",
+											[
+											"import json",
+											"import boto3",
+											"import random",
+											"import datetime",
+											"import uuid",
+											"import os",										   
+											"def lambda_handler(event, context):",
+											"    s3 = boto3.client('s3')",
+											"    ChannelName = os.environ['ChannelName']",
+											"    client = boto3.client('iotanalytics')",
+											"    jsonobject = {}",
+											"    bucket = ''",
+											"    key = ''", 
+											"    objget = s3.get_object(Bucket=event['FormatedJSONS3Bucket'], Key=event['FormatedJSONS3Key'])",
+											"    jsonobject = json.loads(objget['Body'].read().decode('utf-8'))",
+											"    batchcounter=0",
+											"    batchmessages = []",
+											"    for i in range(0,len(jsonobject['kpirecords'])-1):",
+											"        batchmessages.append({'messageId': str(uuid.uuid4()) ,'payload': json.dumps(jsonobject['kpirecords'][i]).encode('utf-8')})",
+											"        batchcounter=batchcounter+1",
+											"        if batchcounter==10:",
+											"            response=client.batch_put_message(channelName=ChannelName,messages=batchmessages)",
+											"            batchmessages = []", 
+											"            batchcounter = 0",
+											"    if len(batchmessages) > 0:",
+											"        response=client.batch_put_message(channelName=ChannelName,messages=batchmessages)"
+											]
+										]
+							}
+				},
+				"Environment" : {
+					"Variables" : 
+						{"ChannelName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTAnalyticsChannel_CollectKPIs"]]}
+					}
+				},
+				"Role"    : { "Fn::GetAtt": [ "IAMRolePutDataToIoTAnalytics", "Arn"]},
+				"Runtime" : "python3.8",
+				"Timeout" : 3
+			}
+		} ,
+		"IAMRolePutDataToIoTAnalytics": {
+				"Type": "AWS::IAM::Role",
+				"Properties": {
+				"RoleName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMRole_PutDataToIoTAnalytics"]]},
+				"AssumeRolePolicyDocument": {
+					"Version": "2012-10-17",
+					"Statement": [
+					{
+						"Effect": "Allow",
+						"Principal": {
+						"Service": [
+							"lambda.amazonaws.com"
+						]
+						},
+						"Action": [
+						"sts:AssumeRole"
+						]
+					}
+					]
+				},
+				"Path": "/"
+			}
+		},
+		"IAMPolicyPutDataToIoTAnalyticsBatchPutMessage": {
+			"Type": "AWS::IAM::Policy",
+			"Properties": {				 
+					"PolicyName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_PutDataToIoTAnalyticsBatchPutMessage"]]},
+					"PolicyDocument": {
+						"Version": "2012-10-17",
+						"Statement": [
+						{
+							"Effect": "Allow",
+							"Action": [
+							"iotanalytics:BatchPutMessage"
+							],
+							"Resource": {"Fn::Join": ["",["arn:aws:iotanalytics:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"} ,":channel/", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTAnalyticsChannel_CollectKPIs"]]}]]}
+						}
+						]
+					},
+					"Roles": [
+						{
+							"Ref": "IAMRolePutDataToIoTAnalytics"
+						}
+					]
+					} 
+				},
+		"IAMPolicyPutDataToIoTAnalyticsS3GetObject": {
+		"Type": "AWS::IAM::Policy",
+		"Properties": {				 
+				"PolicyName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_PutDataToIoTAnalyticsS3GetObject"]]},
+				"PolicyDocument": {
+					"Version": "2012-10-17",
+					"Statement": [
+						{
+							"Sid": "VisualEditor1",
+							"Effect": "Allow",
+							"Action": "s3:GetObject",
+							"Resource": {"Fn::Join": ["",["arn:aws:s3:::", {"Fn::Join": ["",[ {"Ref": "AWS::StackName"}, "s3incomingdata"]]},"/transformedjson/*"]]}
+						}
+					]
+				},
+				"Roles": [
+					{
+						"Ref": "IAMRolePutDataToIoTAnalytics"
+					}
+				]
+				} 
+			},
+		"IAMPolicyPutDataToIoTAnalyticsCloudWatchLogs": {
+			"Type": "AWS::IAM::Policy", 
+			"Properties": {				 
+					"PolicyName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_PutDataToIoTAnalyticsCloudWatchLogs"]]},
+					"PolicyDocument": {
+						"Version": "2012-10-17",
+						"Statement": [
+						{
+							"Effect": "Allow",
+							"Action":  "logs:CreateLogGroup",
+							"Resource": {"Fn::Join": ["",["arn:aws:logs:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"} ,":*"]]}
+						},
+						{
+							"Effect": "Allow",
+							"Action": [ "logs:CreateLogStream",
+										"logs:PutLogEvents" ],
+							"Resource": {"Fn::Join": ["",["arn:aws:logs:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"} ,":log-group:/aws/lambda/", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "Lambda_PutDataToIoTAnalytics"]]},":*"]]}
+						}
+						]
+					},
+					"Roles": [
+						{
+							"Ref": "IAMRolePutDataToIoTAnalytics"
+						}
+					]
+					} 
+				},	
+		"LambdaStoreFileForTroubleShooting" : {
+			"Type" : "AWS::Lambda::Function",
+			"Properties" : {
+				"FunctionName" : {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "Lambda_StoreFileForTroubleShooting"]]},
+				"Handler" : "index.lambda_handler",
+				"Code" : { 
+					"ZipFile" :{"Fn::Join":[
+											"\n",
+											[
+											"import json",
+											"import boto3", 
+											"s3 = boto3.resource('s3')",
+											"def lambda_handler(event, context):",
+											"    bucket = event['S3Bucket']",
+											"    key = event['S3Key']", 
+											"    keytarget = key.replace('json/','invaliddata/').replace('raw/','invaliddata/')",
+											"    s3.Object(bucket,keytarget).copy_from(CopySource=bucket + '/' + key)",
+											"    s3.Object(bucket,key).delete()"
+											]
+										]
+							}
+				},
+				"Environment" : { },
+				"Role"    : { "Fn::GetAtt": [ "IAMRoleStoreFileForTroubleShooting", "Arn"]},
+				"Runtime" : "python3.8",
+				"Timeout" : 3
+			}
+		} ,
+		"IAMRoleStoreFileForTroubleShooting": {
+				"Type": "AWS::IAM::Role",
+				"Properties": {
+				"RoleName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMRole_StoreFileForTroubleShooting"]]},
+				"AssumeRolePolicyDocument": {
+					"Version": "2012-10-17",
+					"Statement": [
+					{
+						"Effect": "Allow",
+						"Principal": {
+						"Service": [
+							"lambda.amazonaws.com"
+						]
+						},
+						"Action": [
+						"sts:AssumeRole"
+						]
+					}
+					]
+				},
+				"Path": "/"
+			}
+		},
+		"IAMPolicyStoreFileForTroubleShootingS3GetDeletePutObject": {
+			"Type": "AWS::IAM::Policy",
+			"Properties": {				 
+					"PolicyName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_StoreFileForTroubleShooting_S3GetDeletePutObject"]]},
+					"PolicyDocument": {
+						"Version": "2012-10-17",
+						"Statement": [
+							{
+								"Sid": "VisualEditor0",
+								"Effect": "Allow",
+								"Action": [
+									"s3:GetObject",
+									"s3:DeleteObject"
+								],
+								"Resource": [
+									{"Fn::Join": ["",["arn:aws:s3:::", {"Fn::Join": ["",[ {"Ref": "AWS::StackName"}, "s3incomingdata"]]},"/raw/*"]]},
+									{"Fn::Join": ["",["arn:aws:s3:::", {"Fn::Join": ["",[ {"Ref": "AWS::StackName"}, "s3incomingdata"]]},"/json/*"]]}
+								]
+							},
+							{
+								"Sid": "VisualEditor1",
+								"Effect": "Allow",
+								"Action": "s3:PutObject",
+								"Resource": {"Fn::Join": ["",["arn:aws:s3:::", {"Fn::Join": ["",[ {"Ref": "AWS::StackName"}, "s3incomingdata"]]},"/invaliddata/*"]]}
+							}
+						]
+					},
+					"Roles": [
+						{
+							"Ref": "IAMRoleStoreFileForTroubleShooting"
+						}
+					]
+					} 
+				},
+		"IAMPolicyStoreFileForTroubleShootingCloudWatchLogs": {
+			"Type": "AWS::IAM::Policy", 
+			"Properties": {				 
+					"PolicyName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_StoreFileForTroubleShooting_CloudWatchLogs"]]},
+					"PolicyDocument": {
+						"Version": "2012-10-17",
+						"Statement": [
+						{
+							"Effect": "Allow",
+							"Action":  "logs:CreateLogGroup",
+							"Resource": {"Fn::Join": ["",["arn:aws:logs:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"} ,":*"]]}
+						},
+						{
+							"Effect": "Allow",
+							"Action": [ "logs:CreateLogStream",
+										"logs:PutLogEvents" ],
+							"Resource": {"Fn::Join": ["",["arn:aws:logs:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"} ,":log-group:/aws/lambda/", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "Lambda_StoreFileForTroubleShooting"]]},":*"]]}
+						}
+						]
+					},
+					"Roles": [
+						{
+							"Ref": "IAMRoleStoreFileForTroubleShooting"
+						}
+					]
+					} 
+				},	 
+		"LambdaAppendThresholds" : {
+			"Type" : "AWS::Lambda::Function",
+			"Properties" : {
+				"FunctionName" : {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "Lambda_AppendThresholds"]]},
+				"Handler" : "index.lambda_handler",
+				"Code" : { 
+					"ZipFile" :{"Fn::Join":[
+											"\n",
+											[
+											"import json",
+											"import logging",
+											"import os",
+											"import boto3",
+											"dynamodb = boto3.client('dynamodb')", 
+											"def lambda_handler(event, context):",
+											"    for e in event:",
+											"        response = dynamodb.get_item(TableName=os.environ['dynamodbtable'], Key={'productionid':{'S':str(e['productionid'])}, 'assetid':{'S':str(e['assetid'])}})",
+											"        e['lowerlimit'] = float(response['Item']['lowerlimit']['N'])",
+											"        e['upperlimit'] = float(response['Item']['upperlimit']['N'])",
+											"    return event"
+											]
+										]
+							}
+				},
+				"Environment" : {
+					"Variables" : 
+						{ 
+							"dynamodbtable" :  {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "DynamoDBTable_KPIThresholds"]]}
+						} 
+				},
+				"Role"    : { "Fn::GetAtt": [ "IAMRoleAppendThresholds", "Arn"]},
+				"Runtime" : "python3.8",
+				"Timeout" : 3
+			}
+		},
+		"IoTAnalyticsPermission": {
+			"Type": "AWS::Lambda::Permission",
+			"DependsOn": [
+				"LambdaAppendThresholds"
+			  ],
+			"Properties": {
+				"FunctionName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "Lambda_AppendThresholds"]]},
+				"Action": "lambda:InvokeFunction",
+				"Principal": "iotanalytics.amazonaws.com" 
+			}
+		},  
+		"IAMRoleAppendThresholds": {
+				"Type": "AWS::IAM::Role",
+				"Properties": {
+				"RoleName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMRole_AppendThresholds"]]},
+				"AssumeRolePolicyDocument": {
+					"Version": "2012-10-17",
+					"Statement": [
+					{
+						"Effect": "Allow",
+						"Principal": {
+						"Service": [
+							"lambda.amazonaws.com"
+						]
+						},
+						"Action": [
+						"sts:AssumeRole"
+						]
+					}
+					]
+				},
+				"Path": "/"
+			}
+		},
+		"IAMPolicyAppendThresholdsDynamoDBGetItem": {
+			"Type": "AWS::IAM::Policy",
+			"Properties": {
+				"PolicyName":  {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_AppendThresholdsDynamoDBGetItem"]]},
+				"PolicyDocument": {
+					"Statement": [
+						{
+							"Effect": "Allow",
+							"Action": "dynamodb:GetItem",
+							"Resource": { "Fn::GetAtt": [ "DynamoDBTableKPIThresholds", "Arn" ] }
+						}
+					]
+				},
+				"Roles": [
+					{
+						"Ref": "IAMRoleAppendThresholds"
+					}
+				]
+			}
+		},
+		"IAMPolicyAppendThresholdsCloudWatchLogs": {
+			"Type": "AWS::IAM::Policy", 
+			"Properties": {				 
+					"PolicyName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_AppendThresholdsCloudWatchLogs"]]},
+					"PolicyDocument": {
+						"Version": "2012-10-17",
+						"Statement": [
+						{
+							"Effect": "Allow",
+							"Action":  "logs:CreateLogGroup",
+							"Resource": {"Fn::Join": ["",["arn:aws:logs:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"} ,":*"]]}
+						},
+						{
+							"Effect": "Allow",
+							"Action": [ "logs:CreateLogStream",
+										"logs:PutLogEvents" ],
+							"Resource": {"Fn::Join": ["",["arn:aws:logs:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"} ,":log-group:/aws/lambda/", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "Lambda_AppendThresholds"]]},":*"]]}
+						}
+						]
+					},
+					"Roles": [
+						{
+							"Ref": "IAMRoleAppendThresholds"
+						}
+					]
+					} 
+				},	
+		"IAMRoleStateMachine": {
+			"Type": "AWS::IAM::Role",
+			"Properties": {
+			  "RoleName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMRole_StateMachine"]]},
+			  "AssumeRolePolicyDocument": {
+				"Version": "2012-10-17",
+				"Statement": [
+					{
+						"Effect": "Allow",
+						"Principal": {
+						  "Service": [
+							"states.amazonaws.com"
+						  ]
+						},
+						"Action": [
+						  "sts:AssumeRole"
+						]
+					  }
+				]
+			},
+			  "Path": "/"
+		   }
+	   },
+	   "IAMPolicyStateMachineCloudWatchLogs": {
+		"Type": "AWS::IAM::Policy", 
+		"Properties": {				 
+				"PolicyName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_StateMachineCloudWatchLogs"]]},
+				"PolicyDocument": {
+					"Version": "2012-10-17",
+					"Statement": [
+						{
+							"Effect": "Allow",
+							"Action": [
+								"logs:CreateLogDelivery",
+								"logs:GetLogDelivery",
+								"logs:UpdateLogDelivery",
+								"logs:DeleteLogDelivery",
+								"logs:ListLogDeliveries",
+								"logs:PutResourcePolicy",
+								"logs:DescribeResourcePolicies",
+								"logs:DescribeLogGroups"
+							],
+							"Resource": "*"
+						}
+					]
+				},
+				"Roles": [
+						{
+							"Ref": "IAMRoleStateMachine"
+						}
+					]
+				} 
+			},	
+		"IAMPolicyStateMachineInvokeLambda": {
+			"Type": "AWS::IAM::Policy", 
+			"DependsOn": [
+				"LambdaFormatIncomingFileToJSON",
+				"LambdaFormatAndCheckDataConsistency",
+				"LambdaPutDataToIoTAnalytics",
+				"LambdaStoreFileForTroubleShooting"
+			  ],
+			"Properties": {				 
+					"PolicyName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_StateMachineInvokeLambda"]]},
+					"PolicyDocument": {
+						"Version": "2012-10-17",
+						"Statement": [
+							{
+								"Sid": "VisualEditor0",
+								"Effect": "Allow",
+								"Action": "lambda:InvokeFunction",
+								"Resource": [
+									{"Fn::GetAtt":["LambdaFormatIncomingFileToJSON","Arn"]},
+									{"Fn::GetAtt":["LambdaFormatAndCheckDataConsistency","Arn"]},
+									{"Fn::GetAtt":["LambdaPutDataToIoTAnalytics","Arn"]},
+									{"Fn::GetAtt":["LambdaStoreFileForTroubleShooting","Arn"]}
+								]
+							}
+						]
+					},
+					"Roles": [
+							{
+								"Ref": "IAMRoleStateMachine"
+							}
+						]
+					} 
+				},
+		"StateMachine": {
+			"Type": "AWS::StepFunctions::StateMachine",
+			"DependsOn": [
+				"LambdaFormatIncomingFileToJSON",
+				"LambdaFormatAndCheckDataConsistency",
+				"LambdaPutDataToIoTAnalytics",
+				"LambdaStoreFileForTroubleShooting"
+			  ],
+			   "Properties": {
+				  "StateMachineName" :{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "StateMachine_KPIsGenerator"]]},
+				  "StateMachineType":"STANDARD",
+				  "DefinitionString" : {
+					 "Fn::Join": [
+						"\n",
+						[
+							"{",
+							"\"Comment\":\"Demo\",",
+							"\"StartAt\":\"FormatIncomingFileToJSON\",",
+							"\"States\":  {",
+							"\"FormatIncomingFileToJSON\":  {",
+							"\"Type\" :\"Task\",",
+							"\"Resource\":",
+							{"Fn::Join": ["",[ "\"", {"Fn::GetAtt":["LambdaFormatIncomingFileToJSON","Arn"]}, "\","]]},
+							"\"ResultPath\":\"$.LambdaResponce\",",
+							"\"Next\":\"ChoiceStateFileFormatValid\"",
+							"},",
+							"\"ChoiceStateFileFormatValid\":  {",
+							"\"Type\" :\"Choice\",",
+							"\"Choices\": [",
+							"{",
+							"\"Variable\":\"$.LambdaResponce.FileFormatValid\",",
+							"\"BooleanEquals\": true,",
+							"\"Next\":\"CheckConsistencyFormatData\"",
+							"}",
+							"],",
+							"\"Default\":\"StoreInvalidFileFormat\"",
+							"},",
+							"\"StoreInvalidFileFormat\":  {",
+							"\"Type\" :\"Task\",",
+							"\"Resource\":",
+							{"Fn::Join": ["",[ "\"", {"Fn::GetAtt":["LambdaStoreFileForTroubleShooting","Arn"]}, "\","]]},
+							"\"Parameters\":{ ",
+							"\"S3Bucket.$\":\"$.LambdaResponce.RawDataS3Bucket\",",
+							"\"S3Key.$\":\"$.LambdaResponce.RawDataS3Key\"",
+							"},",
+							"\"ResultPath\":\"$.LambdaResponce\",",
+							"\"End\": true",
+							"},",
+							"\"CheckConsistencyFormatData\":  {",
+							"\"Type\" :\"Task\",",
+							"\"Resource\":",
+							{"Fn::Join": ["",[ "\"", {"Fn::GetAtt":["LambdaFormatAndCheckDataConsistency","Arn"]}, "\","]]},
+							"\"Parameters\":{ ",
+							"\"JSONS3Bucket.$\":\"$.LambdaResponce.JSONS3Bucket\",",
+							"\"JSONS3Key.$\":\"$.LambdaResponce.JSONS3Key\"",
+							"},",
+							"\"ResultPath\":\"$.LambdaResponce\",",
+							"\"Next\":\"ChoiceStateDataFormatValid\"",
+							"},",
+							"\"ChoiceStateDataFormatValid\":  {",
+							"\"Type\" :\"Choice\",",
+							"\"Choices\": [",
+							"{",
+							"\"Variable\":\"$.LambdaResponce.DataFormatValid\",",
+							"\"BooleanEquals\": true,",
+							"\"Next\":\"BatchPutDataToIoTAnalytics\"",
+							"}",
+							"],",
+							"\"Default\":\"StoreInvalidDataFormat\"",
+							"},",
+							"\"StoreInvalidDataFormat\":  {",
+							"\"Type\" :\"Task\",",
+							"\"Resource\":",
+							{"Fn::Join": ["",[ "\"", {"Fn::GetAtt":["LambdaStoreFileForTroubleShooting","Arn"]}, "\","]]},
+							"\"Parameters\":{ ",
+							"\"S3Bucket.$\":\"$.LambdaResponce.JSONS3Bucket\",",
+							"\"S3Key.$\":\"$.LambdaResponce.JSONS3Key\"",
+							"},",
+							"\"ResultPath\":\"$.LambdaResponce\",",
+							"\"End\": true",
+							"},",
+							"\"BatchPutDataToIoTAnalytics\":  {",
+							"\"Type\" :\"Task\",",
+							"\"Resource\":",
+							{"Fn::Join": ["",[ "\"", {"Fn::GetAtt":["LambdaPutDataToIoTAnalytics","Arn"]}, "\","]]},
+							"\"Parameters\":{ ",
+							"\"FormatedJSONS3Bucket.$\":\"$.LambdaResponce.FormatedJSONS3Bucket\",",
+							"\"FormatedJSONS3Key.$\":\"$.LambdaResponce.FormatedJSONS3Key\"",
+							"},",
+							"\"ResultPath\":\"$.output\",",
+							"\"End\": true",
+							"}",
+							"}",
+							"}"
+						]
+					 ]
+				  },      
+			   "RoleArn" : { "Fn::GetAtt": [ "IAMRoleStateMachine", "Arn"]}
+			  }
+		  },
+		"EventsRuleKPIsGenerator": {
+			"Type": "AWS::Events::Rule",
+			"Properties": {
+				"Name": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "EventsRule_KPIsGenerator"]]},
+				"Description": "ScheduledRule",
+				"ScheduleExpression": "rate(1 minute)",
+				"State": "ENABLED",
+				"Targets": [{
+				"Arn": { "Fn::GetAtt": ["LambdaKPIsGenerator", "Arn"] },
+				"Id": "TriggerEveryMinuteLambaPermissionKPIsGenerator"
+			  }]
+			}
+		  }, 
+		  "EventsRuleS3IncomingData": {
+			"Type": "AWS::Events::Rule",
+			"DependsOn": [
+				"CloudTrailS3EventRawData" 
+			  ], 
+			"Properties": {
+				"Name": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "EventsRule_S3IncomingData"]]},
+			  "EventPattern": {
+				"source": ["aws.s3"],
+				"detail-type": [ "AWS API Call via CloudTrail"],
+				"detail": {"eventSource": ["s3.amazonaws.com"],
+				"eventName": ["PutObject"],
+				"requestParameters": {
+					"bucketName": [{"Fn::Join": ["",[ {"Ref": "AWS::StackName"}, "s3incomingdata"]]}]
+				  }
+				}
+			  },
+			  "Targets": [
+				{"Arn": {"Fn::GetAtt": ["StateMachine", "Arn"] },
+					"Id": "TargetStepFunction",
+					"RoleArn":{"Fn::GetAtt": ["IAMRoleEventsdRulePutObjects", "Arn"] }
+				}
+			  ]
+			}
+		  },
+		  "IAMRoleEventsdRulePutObjects": {
+			"Type": "AWS::IAM::Role",			
+			"DependsOn": [
+				"IotEventInputKPI" 
+			  ],
+			"Properties": {
+			  "RoleName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMRole_EventsdRulePutObjects"]]},
+			  "AssumeRolePolicyDocument": {
+				"Version": "2012-10-17",
+				"Statement": [
+				  {
+					"Effect": "Allow",
+					"Principal": {
+					  "Service": [
+						"events.amazonaws.com"
+					  ]
+					},
+					"Action": [
+					  "sts:AssumeRole"
+					]
+				  }
+				]
+			  },
+			  "Path": "/"
+			}
+		},
+		"IAMPolicyEventsdRulePutObjects": {
+			"Type": "AWS::IAM::Policy",			
+			"DependsOn": [
+				"IotEventInputKPI" 
+			  ],
+			"Properties": {
+				  "PolicyName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_EventsdRulePutObjects"]]},
+				  "PolicyDocument": {
+					"Version": "2012-10-17",
+					"Statement": [
+					    {
+							"Effect": "Allow",
+							"Action": [
+								"states:StartExecution"
+							],
+							"Resource": [
+								{"Fn::Join": ["",["arn:aws:states:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"} ,":stateMachine:", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "StateMachine_KPIsGenerator"]]}]]}
+							]
+						}
+					]
+				  },
+				  "Roles": [
+					  {
+						  "Ref": "IAMRoleEventsdRulePutObjects"
+					  }
+				  ]
+				}
+			}, 
+		  "LambaPermissionKPIsGenerator": {
+			"Type": "AWS::Lambda::Permission", 
+			"Properties": {
+			  "FunctionName": { "Ref": "LambdaKPIsGenerator" },
+			  "Action": "lambda:InvokeFunction",
+			  "Principal": "events.amazonaws.com",
+			  "SourceArn": { "Fn::GetAtt": ["EventsRuleKPIsGenerator", "Arn"] }
+			}
+		  },
+		"LambdaKPIsGenerator" : {
+			"Type" : "AWS::Lambda::Function",
+			"DependsOn": [
+				"IoTAnalyticsChannelKPI"
+			  ],
+			"Properties" : {
+			 "FunctionName" : {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "Lambda_KPIsGenerator"]]},
+				"Handler" : "index.lambda_handler",
+				"Code" : { 
+					"ZipFile" :{"Fn::Join":[
+										 "\n",
+										 [
+											"import json",
+											"import boto3",
+											"import datetime",
+											"import base64",
+											"import random",
+											"import os",
+											"import uuid",
+											"s3 = boto3.client('s3')",
+											"dynamodb = boto3.client('dynamodb') ",
+											"invocationcounter1 = None",
+											"productionorderid = None",
+											"def lambda_handler(event, context):",
+											"    global invocationcounter1",
+											"    global productionorderid",
+											"    if not invocationcounter1:",
+											"        invocationcounter1 = 1",
+											"        productionorderid=uuid.uuid4()",
+											"        updateproductionorderidandthresholds(productionorderid)",
+											"    else:",
+											"        if invocationcounter1 == 10 :",
+											"            invocationcounter1 = 1",
+											"            productionorderid=uuid.uuid4()",
+											"            updateproductionorderidandthresholds(productionorderid)",
+											"        else :",
+											"            invocationcounter1 = invocationcounter1 + 1",
+											"    csvdata = '' ",
+											"    for i in list(range(int(os.environ['assetcount']))):",
+											"        csvdata =  datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + ';' + str(productionorderid) + ';assetid' + str(i) + ';'+  '{:.2f}'.format(random.random()*100)  + '\\r' + csvdata ",
+											"    s3.put_object(Bucket= os.environ['bucket'], Key='raw/' + datetime.datetime.now().strftime('%Y%m%d%H%M%S') + '.csv', Body=csvdata.encode('utf-8'))",
+											"def updateproductionorderidandthresholds(productionorderid): ",
+											"    for i in list(range(int(os.environ['assetcount']))):",
+											"        dynamodb.put_item(TableName=os.environ['dynamodbtable'], Item={'productionid':{'S':str(productionorderid)}, 'assetid':{'S':'assetid' + str(i)}, 'lowerlimit':{'N':str(random.randint(0,10))}, 'upperlimit':{'N':str(random.randint(90,100))}})"										
+										  ]
+									   ]
+						   }
+				},
+				"Environment" : {
+					"Variables" : 
+						{
+							"bucket": {"Fn::Join": ["",[ {"Ref": "AWS::StackName"}, "s3incomingdata"]]},
+							"assetcount": 5,
+							"dynamodbtable" :  {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "DynamoDBTable_KPIThresholds"]]}
+						} 
+				},
+				"Role"    : { "Fn::GetAtt": [ "IAMRoleKPIsGenerator", "Arn"]},
+				"Runtime" : "python3.7",
+				"Timeout" : 3
+			}
+		} ,
+		"IAMRoleKPIsGenerator": {
+			 "Type": "AWS::IAM::Role",
+			 "DependsOn": [
+				"IoTAnalyticsChannelKPI"
+			  ],
+			 "Properties": {
+			   "RoleName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMRole_KPIsGenerator"]]},
+			   "AssumeRolePolicyDocument": {
+				 "Version": "2012-10-17",
+				 "Statement": [
+				   {
+					 "Effect": "Allow",
+					 "Principal": {
+					   "Service": [
+						 "lambda.amazonaws.com"
+					   ]
+					 },
+					 "Action": [
+					   "sts:AssumeRole"
+					 ]
+				   }
+				 ]
+			   },
+			   "Path": "/"
+			}
+		},
+		"IAMPolicyKPIsGeneratorS3GetPutObject": {
+			"Type": "AWS::IAM::Policy",
+			"DependsOn": [
+			   "IoTAnalyticsChannelKPI" 
+			 ],
+			"Properties": {				 
+				   "PolicyName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_KPIsGeneratorS3GetPutObject"]]},
+				   "PolicyDocument": {
+						"Version": "2012-10-17",
+						"Statement": [
+                            {
+                                "Sid": "VisualEditor0",
+                                "Effect": "Allow",
+                                "Action": "s3:PutObject",
+                                "Resource": {"Fn::Join": ["",["arn:aws:s3:::", {"Fn::Join": ["",[ {"Ref": "AWS::StackName"}, "s3incomingdata"]]},"/*"]]}
+                            }
+						]
+				   },
+				   "Roles": [
+					   {
+						   "Ref": "IAMRoleKPIsGenerator"
+					   }
+				   ]
+				 } 
+			 },
+		"IAMPolicyKPIsGeneratorDynamoDBPutItem": {
+				"Type": "AWS::IAM::Policy",
+				"Properties": {
+					"PolicyName":  {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_KPIsGeneratorDynamoDBPutItem"]]},
+					"PolicyDocument": {
+						"Statement": [
+							{
+								"Effect": "Allow",
+								"Action": "dynamodb:PutItem",
+								"Resource": { "Fn::GetAtt": [ "DynamoDBTableKPIThresholds", "Arn" ] }
+							}
+						]
+					},
+					"Roles": [
+						{
+							"Ref": "IAMRoleKPIsGenerator"
+						}
+					]
+				}
+			},
+		"IAMPolicyKPIsGeneratorCloudWatchLogs": {
+			"Type": "AWS::IAM::Policy", 
+			"Properties": {				 
+					"PolicyName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_KPIsGeneratorCloudWatchLogs"]]},
+					"PolicyDocument": {
+						"Version": "2012-10-17",
+						"Statement": [
+						{
+							"Effect": "Allow",
+							"Action":  "logs:CreateLogGroup",
+							"Resource": {"Fn::Join": ["",["arn:aws:logs:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"} ,":*"]]}
+						},
+						{
+							"Effect": "Allow",
+							"Action": [ "logs:CreateLogStream",
+										"logs:PutLogEvents" ],
+							"Resource": {"Fn::Join": ["",["arn:aws:logs:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"} ,":log-group:/aws/lambda/", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "Lambda_KPIsGenerator"]]},":*"]]}
+						}
+						]
+					},
+					"Roles": [
+						{
+							"Ref": "IAMRoleKPIsGenerator"
+						}
+					]
+					} 
+				},	 
+		"IotEventInputKPI": {
+			"Type": "AWS::IoTEvents::Input",
+			"Properties": {
+				"InputName":{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_KPIsFromIoTAnalytics"]]},
+				"InputDescription": "KPI's Data From IoT Analytics",
+				"InputDefinition": {
+					"Attributes": [
+						{ "JsonPath": "PartitionKey" },
+						{ "JsonPath": "SortKey" },
+						{ "JsonPath": "KPICount" },
+						{ "JsonPath": "KPIMin" },
+						{ "JsonPath": "KPIMax" },
+						{ "JsonPath": "KPISum" },
+						{ "JsonPath": "KPIAvg" },
+						{ "JsonPath": "KPIInRange" },
+						{ "JsonPath": "KPILowerLimit" },
+						{ "JsonPath": "KPIUpperLimit" }
+					]
+				}
+			}
+		},
+		"IotEventInputMessageMissingRecords": {
+			"Type": "AWS::IoTEvents::Input",
+			"Properties": {
+				"InputName":{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]},
+				"InputDescription": "KPI's Data From IoT Analytics",
+				"InputDefinition": {
+					"Attributes": [
+						{ "JsonPath": "AssetID" },
+						{ "JsonPath": "AlarmLevel" } 
+					]
+				}
+			}
+		},
+		"DynamoDBTableKPI": {
+			"Type": "AWS::DynamoDB::Table",
+			"Properties": {
+				"TableName" :  {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "DynamoDBTable_StoreKPIs"]]},
+				"AttributeDefinitions": [
+					{
+						"AttributeName": "assetid",
+						"AttributeType": "S"
+					},
+					{
+						"AttributeName": "datetime",
+						"AttributeType": "S"
+					}
+				],
+				"KeySchema": [
+					{
+						"AttributeName": "assetid",
+						"KeyType": "HASH"
+					},
+					{
+						"AttributeName": "datetime",
+						"KeyType": "RANGE"
+					}
+				],
+				"ProvisionedThroughput": {
+					"ReadCapacityUnits": "1",
+					"WriteCapacityUnits": "1"
+				}
+			}
+		},
+		"DynamoDBTableKPIThresholds": {
+			"Type": "AWS::DynamoDB::Table",
+			"Properties": {
+				"TableName" :  {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "DynamoDBTable_KPIThresholds"]]},
+				"AttributeDefinitions": [
+					{
+						"AttributeName": "productionid",
+						"AttributeType": "S"
+					},
+					{
+						"AttributeName": "assetid",
+						"AttributeType": "S"
+					} 
+				],
+				"KeySchema": [
+					{
+						"AttributeName": "productionid",
+						"KeyType": "HASH"
+					},
+					{
+						"AttributeName": "assetid",
+						"KeyType": "RANGE"
+					}
+				],
+				"ProvisionedThroughput": {
+					"ReadCapacityUnits": "1",
+					"WriteCapacityUnits": "1"
+				}
+			}
+		}, 
+		"IAMRoleIotEventRecorder": {
+			"Type": "AWS::IAM::Role",
+			"Properties": {
+			  "RoleName" : {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMRole_IotEventRecorder"]]},
+				"AssumeRolePolicyDocument": {
+					"Statement": [
+						{
+							"Effect": "Allow",
+							"Principal": {
+								"Service": [
+									"iotevents.amazonaws.com"
+								]
+							},
+							"Action": [
+								"sts:AssumeRole"
+							]
+						}
+					]
+				},
+				"Path": "/"
+			}
+		},
+		"IAMPolicyIoTEventsRecorderDynamoDB": {
+			"Type": "AWS::IAM::Policy",
+			"Properties": {
+				"PolicyName":  {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_IoTEventsRecorderDynamoDB"]]},
+				"PolicyDocument": {
+					"Statement": [
+						{
+							"Effect": "Allow",
+							"Action": "dynamodb:PutItem",
+							"Resource": { "Fn::GetAtt": [ "DynamoDBTableKPI", "Arn" ] }
+						}
+					]
+				},
+				"Roles": [
+					{
+						"Ref": "IAMRoleIotEventRecorder"
+					}
+				]
+			}
+		},
+		"IAMPolicyIoTEventsRecorderLambda": {
+			"Type": "AWS::IAM::Policy",
+			"Properties": {
+				"PolicyName":  {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_IoTEventsRecorderLambda"]]},
+				"PolicyDocument": {
+					"Statement": [
+						{
+							"Effect": "Allow",
+							"Action": "lambda:InvokeFunction",
+							"Resource":{"Fn::Join": ["",["arn:aws:lambda:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"} ,":function/", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "Lambda_AppendThresholds"]]}]]}
+						}
+					]
+				},
+				"Roles": [
+					{
+						"Ref": "IAMRoleIotEventRecorder"
+					}
+				]
+			}
+		},
+		"IAMPolicyIoTEventsRecorderBatchPutMessages": {
+			"Type": "AWS::IAM::Policy",
+			"Properties": {
+				"PolicyName":  {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_IoTEventsRecorderBatchPutMessages"]]},
+				"PolicyDocument": {
+					"Statement": [
+						{
+							"Effect": "Allow",
+							"Action": "iotevents:BatchPutMessage",
+							"Resource":{"Fn::Join": ["",["arn:aws:iotevents:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"} ,":input/", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]}]]}
+						}
+					]
+				},
+				"Roles": [
+					{
+						"Ref": "IAMRoleIotEventRecorder"
+					}
+				]
+			}
+		},
+		"IotEventsDetectorKPI": {
+			"Type": "AWS::IoTEvents::DetectorModel",
+			"Properties": {
+				"DetectorModelName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventDetector_RecordKPIs"]]},
+				"DetectorModelDescription": "Record Incoming KPI's to DynamoDB",
+				"Key": "PartitionKey",
+				"RoleArn": { "Fn::GetAtt": [ "IAMRoleIotEventRecorder", "Arn" ] },
+				"EvaluationMethod": "SERIAL",
+				"DetectorModelDefinition": {
+					"States": [
+						{
+							"StateName": "SendAlarm",
+							"OnInput": {
+								"Events": [],
+								"TransitionEvents": [
+									{
+										"EventName": "BackToRecording",
+										"Condition": {"Fn::Join": ["",["currentInput('", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_KPIsFromIoTAnalytics"]]} ,"')" ]]},
+										"Actions": [],
+										"NextState": "Recording"
+									}
+								]
+							},
+							"OnEnter": {
+								"Events": [
+									{
+										"EventName": "SendMessage",
+										"Condition": "true",
+										"Actions": [
+											{
+												"IotEvents": {
+													"InputName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]},
+													"Payload": {
+														"ContentExpression": {"Fn::Join": ["",[ "'{ \"AssetID\": \"${$input.", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_KPIsFromIoTAnalytics"]]} ,".PartitionKey}\", \"AlarmLevel\":2}'"]]},
+														"Type": "JSON"
+													}
+												}
+											}
+										]
+									}
+								]
+							},
+							"OnExit": {
+								"Events": []
+							}
+						},
+						{
+							"StateName": "Recording",
+							"OnInput": {
+								"Events": [
+									{
+										"EventName": "RecordKPI",
+										"Condition": "true",
+										"Actions": [
+											{
+												"DynamoDBv2": {
+													"Payload": {
+														"ContentExpression":  {"Fn::Join": ["",[ "'{ \"assetid\": \"${$input.", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_KPIsFromIoTAnalytics"]]} ,".PartitionKey}\", \"datetime\": \"${$input.", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_KPIsFromIoTAnalytics"]]} ,".SortKey}\", \"KPICount\": \"${$input.", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_KPIsFromIoTAnalytics"]]} ,".KPICount}\", \"KPIMin\": \"${$input.", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_KPIsFromIoTAnalytics"]]} ,".KPIMin}\", \"KPIMax\": \"${$input.",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_KPIsFromIoTAnalytics"]]} ,".KPIMax}\", \"KPISum\": \"${$input.", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_KPIsFromIoTAnalytics"]]} ,".KPISum}\", \"KPIAvg\": \"${$input.", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_KPIsFromIoTAnalytics"]]} ,".KPIAvg}\" , \"KPIInRange\": \"${$input.", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_KPIsFromIoTAnalytics"]]} ,".KPIInRange}\", \"KPILowerLimit\": \"${$input.", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_KPIsFromIoTAnalytics"]]} ,".KPILowerLimit}\", \"KPIUpperLimit\": \"${$input.", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_KPIsFromIoTAnalytics"]]} ,".KPIUpperLimit}\" }'"    ]]}	 ,
+														"Type": "JSON"
+													},
+													"TableName": {"Fn::Join": ["",["'", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "DynamoDBTable_StoreKPIs"]]} ,"'" ]]}  
+												}    
+											},
+											{
+												"ResetTimer": {
+													"TimerName": "TimerIncomingRecords"
+												}
+											}
+										]
+									}
+								],
+								"TransitionEvents": [
+									{
+										"EventName": "NoIncomingData",
+										"Condition": "timeout(\"TimerIncomingRecords\")",
+										"Actions": [],
+										"NextState": "SendWarning"
+									}
+								]
+							},
+							"OnEnter": {
+								"Events": [
+									{
+										"EventName": "Init",
+										"Condition": "true",
+										"Actions": [
+											{
+												"SetTimer": {
+													"TimerName": "TimerIncomingRecords",
+													"Seconds": 310 
+												}
+											}
+										]
+									}
+								]
+							},
+							"OnExit": {
+								"Events": []
+							}
+						},
+						{
+							"StateName": "SendWarning",
+							"OnInput": {
+								"Events": [],
+								"TransitionEvents": [
+									{
+										"EventName": "BackToRecording", 
+										"Condition": {"Fn::Join": ["",["currentInput('", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_KPIsFromIoTAnalytics"]]} ,"')" ]]},
+										"Actions": [],
+										"NextState": "Recording"
+									},
+									{
+										"EventName": "NoIncomingData",
+										"Condition": "timeout(\"TimerIncomingRecords\")",
+										"Actions": [],
+										"NextState": "SendAlarm"
+									}
+								]
+							},
+							"OnEnter": {
+								"Events": [
+									{
+										"EventName": "InitTimerAndSendWarningMessage",
+										"Condition": "true",
+										"Actions": [
+											{
+												"ResetTimer": {
+													"TimerName": "TimerIncomingRecords"
+												}
+											},
+											{
+												"IotEvents": {
+													"InputName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]},
+													"Payload": {
+														"ContentExpression": {"Fn::Join": ["",[ "'{ \"AssetID\": \"${$input.", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_KPIsFromIoTAnalytics"]]} ,".PartitionKey}\", \"AlarmLevel\":1}'"]]},
+														"Type": "JSON"
+													}
+												}
+											}
+										]
+									}
+								]
+							},
+							"OnExit": {
+								"Events": []
+							}
+						}
+					],
+					"InitialStateName": "Recording"
+				}
+			}
+		}, 
+		"IotEventsMessageSender": {
+			"Type": "AWS::IoTEvents::DetectorModel",
+			"Properties": {
+				"DetectorModelName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventDetector_MessageSender"]]},
+				"DetectorModelDescription": "Sender alarm or warning messages", 
+				"RoleArn": { "Fn::GetAtt": [ "IAMRoleIotEventMessageSender", "Arn" ] },
+				"EvaluationMethod": "SERIAL",
+				"DetectorModelDefinition": {
+					"States": [
+						{
+							"StateName": "BufferMessages",
+							"OnInput": {
+								"Events": [
+									{
+										"EventName": "Init Message Warning",
+										"Condition": {"Fn::Join": ["",[ "currentInput('",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]},"') && $input.",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]} ,".AlarmLevel == 1  && startsWith($variable.ConcatenateMessageLevel1,  \"The\") == false"]]},
+										"Actions": [
+											{
+												"SetVariable": {
+													"VariableName": "ConcatenateMessageLevel1",
+													"Value": "'The following asset IDs do not sent records for 5 minutes : '"
+												}
+											}
+										]
+									},
+									{
+										"EventName": "ConcatenateMessageLevel1",
+										"Condition": {"Fn::Join": ["",[ "currentInput('",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]},"') && $input.",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]} ,".AlarmLevel == 1"]]},
+										"Actions": [
+											{
+												"SetVariable": {
+													"VariableName": "ConcatenateMessageLevel1",
+													"Value": {"Fn::Join": ["",[ "'${$variable.ConcatenateMessageLevel1} \n${$input.",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]},".AssetID};'"]]}
+												}
+											}
+										]
+									},
+									{
+										"EventName": "Init Message Alarm",
+										"Condition":  {"Fn::Join": ["",[ "currentInput('",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]},"') && $input.",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]} ,".AlarmLevel == 2  && startsWith($variable.ConcatenateMessageLevel2,  \"The\") == false"]]},
+										"Actions": [
+											{
+												"SetVariable": {
+													"VariableName": "ConcatenateMessageLevel2",
+													"Value": "'The following asset IDs do not sent records for 10 minutes : '"
+												}
+											}
+										]
+									},
+									{
+										"EventName": "ConcatenateMessageLevel2",
+										"Condition":  {"Fn::Join": ["",[ "currentInput('",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]},"') && $input.",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]} ,".AlarmLevel == 2"]]},
+										"Actions": [
+											{
+												"SetVariable": {
+													"VariableName": "ConcatenateMessageLevel2",
+													"Value": {"Fn::Join": ["",[ "'${$variable.ConcatenateMessageLevel2} \n${$input.",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]},".AssetID};'"]]}
+												}
+											}
+										]
+									}
+								],
+								"TransitionEvents": [
+									{
+										"EventName": "SendMessages",
+										"Condition": "timeout('BufferIncomingAlarms')",
+										"Actions": [ 
+											{
+												"Sns": {
+													"TargetArn": {"Fn::Join": ["",["arn:aws:sns:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"} ,":",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "MessagesFromIoTEvents"]]}]]},
+													"Payload": {
+														"ContentExpression": "'${$variable.ConcatenateMessageLevel1}\n${$variable.ConcatenateMessageLevel2}'",
+														"Type": "STRING"
+													}
+												}
+											}
+										 ],
+										"NextState": "WaitingState"
+									}
+								]
+							},
+							"OnEnter": {
+								"Events": [
+									{
+										"EventName": "Init",
+										"Condition": "true",
+										"Actions": [
+											{
+												"SetTimer": {
+													"TimerName": "BufferIncomingAlarms",
+													"Seconds": 60 
+												}
+											}
+										]
+									},
+									{
+										"EventName": "Init Message Warning",
+										"Condition": {"Fn::Join": ["",[ "currentInput('",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]},"') && $input.",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]} ,".AlarmLevel == 1"]]},
+										"Actions": [
+											{
+												"SetVariable": {
+													"VariableName": "ConcatenateMessageLevel1",
+													"Value": "'The following asset IDs do not sent records for 5 minutes : '"
+												}
+											}
+										]
+									},
+									{
+										"EventName": "ConcatenateMessageLevel1",
+										"Condition": {"Fn::Join": ["",[ "currentInput('",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]},"') && $input.",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]} ,".AlarmLevel == 1"]]},
+										"Actions": [
+											{
+												"SetVariable": {
+													"VariableName": "ConcatenateMessageLevel1",
+													"Value": {"Fn::Join": ["",[ "'${$variable.ConcatenateMessageLevel1} \n${$input.",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]},".AssetID};'"]]}
+												}
+											}
+										]
+									},
+									{
+										"EventName": "Init Message Alarm",
+										"Condition":  {"Fn::Join": ["",[ "currentInput('",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]},"') && $input.",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]} ,".AlarmLevel == 2"]]},
+										"Actions": [
+											{
+												"SetVariable": {
+													"VariableName": "ConcatenateMessageLevel2",
+													"Value": "'The following asset IDs do not sent records for 10 minutes : '"
+												}
+											}
+										]
+									},
+									{
+										"EventName": "ConcatenateMessageLevel2",
+										"Condition":  {"Fn::Join": ["",[ "currentInput('",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]},"') && $input.",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]} ,".AlarmLevel == 2"]]},
+										"Actions": [
+											{
+												"SetVariable": {
+													"VariableName": "ConcatenateMessageLevel2",
+													"Value": {"Fn::Join": ["",[ "'${$variable.ConcatenateMessageLevel2} \n${$input.",{"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]},".AssetID};'"]]}
+												}
+											}
+										]
+									}
+								]
+							},
+							"OnExit": {
+								"Events": []
+							}
+						},
+						{
+							"StateName": "WaitingState",
+							"OnInput": {
+								"Events": [],
+								"TransitionEvents": [
+									{
+										"EventName": "IncomingMessages",
+										"Condition":  {"Fn::Join": ["",["currentInput('", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_MessageMissingRecords"]]} ,"')" ]]},
+										"Actions": [],
+										"NextState": "BufferMessages"
+									}
+								]
+							},
+							"OnEnter": {
+								"Events": [
+									{
+										"EventName": "Init",
+										"Condition": "true",
+										"Actions": [
+											{
+												"SetVariable": {
+													"VariableName": "ConcatenateMessageLevel1",
+													"Value": "''"
+												}
+											},
+											{
+												"SetVariable": {
+													"VariableName": "ConcatenateMessageLevel2",
+													"Value": "''"
+												}
+											}
+										]
+									}
+								]
+							},
+							"OnExit": {
+								"Events": []
+							}
+						}
+					],
+					"InitialStateName": "WaitingState"
+				}
+			}
+		},
+		"IAMRoleIotEventMessageSender": {
+			"Type": "AWS::IAM::Role",
+			"Properties": {
+			  "RoleName" : {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMRole_IotEventMessageSender"]]},
+				"AssumeRolePolicyDocument": {
+					"Statement": [
+						{
+							"Effect": "Allow",
+							"Principal": {
+								"Service": [
+									"iotevents.amazonaws.com"
+								]
+							},
+							"Action": [
+								"sts:AssumeRole"
+							]
+						}
+					]
+				},
+				"Path": "/"
+			}
+		},
+		"IAMPolicyIoTEventsMessageSender": {
+			"Type": "AWS::IAM::Policy",
+			"Properties": {
+				"PolicyName":  {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_IoTEventsMessageSender"]]},
+				"PolicyDocument": {
+					"Statement": [
+						{
+							"Effect": "Allow",
+							"Action": "sns:Publish",
+							"Resource":{"Fn::Join": ["",["arn:aws:sns:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"} ,":",  {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "MessagesFromIoTEvents"]]}]]}
+						}
+					]
+				},
+				"Roles": [
+					{
+						"Ref": "IAMRoleIotEventMessageSender"
+					}
+				]
+			}
+		},
+    "IoTAnalyticsChannelKPI": {
+	  "Type": "AWS::IoTAnalytics::Channel",
+      "Properties": {
+        "ChannelName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTAnalyticsChannel_CollectKPIs"]]},
+        "RetentionPeriod": {
+          "Unlimited": false,
+          "NumberOfDays": 10
+        }
+      }
+    },
+    "IoTAnalyticsDatastoreKPI": {
+	  "Type":  "AWS::IoTAnalytics::Datastore",
+      "Properties": {
+        "DatastoreName":  {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTAnalyticsDatastore_StoreKPIs"]]},
+        "RetentionPeriod": {
+          "Unlimited": false,
+          "NumberOfDays": 10
+        }
+      }
+    },
+    "IoTAnalyticsPipelineKPI": {
+	  "Type":  "AWS::IoTAnalytics::Pipeline",
+	  "DependsOn": [
+		"LambdaAppendThresholds",
+		"IoTAnalyticsChannelKPI",
+		"IoTAnalyticsDatastoreKPI"
+	  ],
+      "Properties": {
+        "PipelineName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "iotanalyticspipeline_processkpis"]]},
+        "PipelineActivities": [
+          {
+            "Channel": {
+              "Name": "ChannelActivity",
+			  "ChannelName":  {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTAnalyticsChannel_CollectKPIs"]]},
+			  "Next": "LambdaActivity"
+			},
+			"Lambda": {
+				"Name": "LambdaActivity",
+				"LambdaName":  {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "Lambda_AppendThresholds"]]},
+				"BatchSize": 10,
+				"Next": "DatastoreActivity"
+			},
+            "Datastore": {
+              "Name": "DatastoreActivity",
+              "DatastoreName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTAnalyticsDatastore_StoreKPIs"]]}
+            }
+          }
+        ]
+      }
+    },
+	"IAMRoleIoTAnalyticDataset": {
+		"Type": "AWS::IAM::Role",			
+		"DependsOn": [
+			"IotEventInputKPI" 
+		  ],
+		"Properties": {
+		  "RoleName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMRole_IoTAnalyticDataset"]]},
+		  "AssumeRolePolicyDocument": {
+			"Version": "2012-10-17",
+			"Statement": [
+			  {
+				"Effect": "Allow",
+				"Principal": {
+				  "Service": [
+					"iotanalytics.amazonaws.com"
+				  ]
+				},
+				"Action": [
+				  "sts:AssumeRole"
+				]
+			  }
+			]
+		  },
+		  "Path": "/"
+		}
+	},
+	"IAMPolicyIoTAnalyticDataset": {
+		"Type": "AWS::IAM::Policy",			
+		"DependsOn": [
+			"IotEventInputKPI" 
+		  ],
+		"Properties": {
+			  "PolicyName": {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IAMPolicy_IoTAnalyticDataset"]]},
+			  "PolicyDocument": {
+				"Version": "2012-10-17",
+				"Statement": [
+				  {
+					"Effect": "Allow",
+					"Action": [
+					  "iotevents:BatchPutMessage"
+					],			 
+					"Resource": {"Fn::Join": ["",["arn:aws:iotevents:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"} ,":input/", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_KPIsFromIoTAnalytics"]]}]]}
+				  }
+				]
+			  },
+			  "Roles": [
+				  {
+					  "Ref": "IAMRoleIoTAnalyticDataset"
+				  }
+			  ]
+			}
+		},
+    "IoTAnalyticsDatasetKPI": {
+      "Type": "AWS::IoTAnalytics::Dataset",
+      "DependsOn": [
+        "IoTAnalyticsDatastoreKPI"
+      ],
+      "Properties": {
+        "DatasetName":  {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTAnalyticsDataset_AnalyseKPIs"]]},
+        "Actions": [
+          {
+			"ActionName": "SqlAction",
+            "QueryAction": {
+			  "Filters" : [{
+				"DeltaTime" : {
+					"OffsetSeconds" : 0,
+					"TimeExpression" : "from_unixtime(timestamp)"
+				  }
+			  }],
+			  "SqlQuery": {"Fn::Join": ["",[ "select assetid as PartitionKey, concat( cast(current_date as varchar),' ' ,cast(localtime  as varchar)) as SortKey, count(metric) as KPICount, min(metric ) as KPIMin, max(metric) as KPIMax, round(sum(metric),2) as KPISum, round(avg(metric),2) as KPIAvg, CASE WHEN round(avg(metric),2) <= CAST(upperlimit AS DOUBLE) and round(avg(metric),2) >= CAST(lowerlimit AS DOUBLE) then TRUE else FALSE END as KPIInRange, lowerlimit as KPILowerLimit, upperlimit as KPIUpperLimit from ", {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTAnalyticsDatastore_StoreKPIs"]]}, " group by assetid,lowerlimit, upperlimit"]]}
+            }
+          }
+		],
+		"RetentionPeriod": {
+			"Unlimited": false,
+			"NumberOfDays": 10
+		},
+        "Triggers": [
+          {
+            "Schedule": {
+              "ScheduleExpression": "cron(*/5 * * * ? *)"
+            }
+          }
+		],
+		"ContentDeliveryRules":[ {
+				"Destination" :{
+					"IotEventsDestinationConfiguration" : {
+						"InputName" : {"Fn::Join": ["_",[ {"Ref": "AWS::StackName"}, "IoTEventsInput_KPIsFromIoTAnalytics"]]},
+						"RoleArn" : {"Fn::GetAtt": ["IAMRoleIoTAnalyticDataset", "Arn"] } 
+					}
+				}
+			} 
+		  ]
+      }
+    }
+	},
+	"Outputs" : {
+	}
+}
+

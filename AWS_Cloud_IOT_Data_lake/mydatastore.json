@@ -1,0 +1,10 @@
+{
+    "datastoreName": "akr_datalake_silver_iota_datastore",
+    "datastoreStorage": {
+        "customerManagedS3": {
+            "bucket": "akr-datalake-silver-iota-datastore",
+            "keyPrefix": "myhome_raspberrypi/",
+            "roleArn": "arn:aws:iam::888093449492:role/iota_cmsb_role"
+        }
+    }
+}

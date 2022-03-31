@@ -1,0 +1,13 @@
+{
+    "sql": "SELECT * FROM 'iota/topic/myhome_raspberrypi'",
+    "ruleDisabled": false,
+    "awsIotSqlVersion": "2016-03-23",
+    "actions": [
+        {
+            "iotAnalytics": {
+                "channelName": "akr_datalake_raw_iota_channel",
+                "roleArn": "arn:aws:iam::888093449492:role/iota_cmsb_role"
+            }
+        }
+    ]
+}

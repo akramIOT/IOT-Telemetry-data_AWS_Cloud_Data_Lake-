@@ -1,0 +1,33 @@
+{
+    "datasetName": "akr_datalake_gold_iota_dataset",
+    "actions": [
+        {
+            "actionName": "myaction",
+            "queryAction": {
+                "sqlQuery": "SELECT current_timestamp dtts, deviceid, avg(temp) avg_temp, avg(flow) avg_flow, avg(humidity)  avg_humidity, avg(vibration) avg_vibration FROM akr_datalake_silver_iota_datastore where   from_unixtime(cast(current_ts as double)) > current_timestamp - interval '5' minute group by deviceid"
+            }
+        }
+    ],
+    "contentDeliveryRules": [
+        {
+            "destination": {
+                "s3DestinationConfiguration": {
+                    "bucket": "akr-datalake-gold-iota-dataset",
+                    "key": "akr_datalake_iota_glue_db/akr_device_telemetry_stats/!{iotanalytics:scheduleTime}_!{iotanalytics:versionId}.csv",
+                    "glueConfiguration": {
+                        "tableName": "akr_device_telemetry_stats",
+                        "databaseName": "akr_datalake_iota_glue_db"
+                    },
+                    "roleArn": "arn:aws:iam::888093449492:role/iota_cmsb_role"
+                }
+            }
+        }
+    ],
+    "triggers": [
+        {
+            "schedule": {
+                "expression": "cron(0/5 * * * ? *)"
+            }
+        }
+    ]
+}

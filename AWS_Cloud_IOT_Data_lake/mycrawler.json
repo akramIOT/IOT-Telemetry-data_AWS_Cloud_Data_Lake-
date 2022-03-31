@@ -1,0 +1,14 @@
+{
+    "Name": "akr_datalake_silver_iota_datastore_glue_crawler",
+    "Role": "arn:aws:iam::888093449492:role/iota_cmsb_role",
+    "DatabaseName": "akr_datalake_iota_glue_db",
+    "Description": "",
+    "Targets": {
+        "S3Targets": [
+            {
+                "Path": "s3://akr-datalake-silver-iota-datastore/myhome_raspberrypi/datastore/akr_datalake_silver_iota_datastore"
+            }
+        ]
+    },
+    "Schedule": "cron(0/5 * * * ? *)"
+}

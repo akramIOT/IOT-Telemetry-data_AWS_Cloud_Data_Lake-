@@ -1,0 +1,13 @@
+{
+    "fileLocations": [
+        {
+           "URIs":[ "https://akr-datalake-silver-iota-datastore.s3.amazonaws.com/akr_device_specs/device_specs.csv",
+           ]
+        }
+    ],
+    "globalUploadSettings": {
+       "format": "CSV",
+       "delimiter": ",",
+       "containsHeader": "true"
+     }   
+}
