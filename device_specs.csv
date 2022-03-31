@@ -1,0 +1,6 @@
+deviceid,manufacturer,weight,battery,battery_life, min_temp_c, max_temp_c, min_humidity, max_humidity
+"P01","AMZN1","40g / 1.4oz", "CR2416", "Typ. over 1 year (more in normal conditions and less in extreme cold)",-40,60,0,80
+"P02","AMZN1","40g / 1.4oz", "CR2416", "Typ. over 1 year (more in normal conditions and less in extreme cold)",-40,60,0,80
+"P03","AMZN2","35g / 1.1oz", "CR2432", "Typ. over 2 years (more in normal conditions and less in extreme cold)",-35,45,0,80
+"P04","AMZN2","35g / 1.1oz", "CR2432", "Typ. over 2 years (more in normal conditions and less in extreme cold)",-35,45,0,80
+"P05","AMZN3","39g / 1.1oz", "CR2432", "Typ. over 1 years (more in normal conditions and less in extreme cold)",-45,50,0,80
