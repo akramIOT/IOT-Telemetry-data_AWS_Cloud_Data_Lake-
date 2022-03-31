@@ -1,0 +1,308 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "Setup pre-requisites"
+Parameters:
+  DataLakeRawIoTAChannelS3Bucket:
+    Description: "S3 bucket for IoT Analytics Channel"
+    Type: String
+    Default: "aks-datalake-raw-iota-channel"
+  DataLakeSilverIoTADatastoreS3Bucket:
+    Description: "S3 bucket for IoT Analytics Data store"
+    Type: String
+    Default: "aks-datalake-silver-iota-datastore"
+  DataLakeGoldIoTADatasetS3Bucket:
+    Description: "S3 bucket for IoT Analytics Data set"
+    Type: String
+    Default: "aks-datalake-gold-iota-dataset"
+  DataLakeGoldS3Bucket:
+    Description: "S3 bucket in your existing data lake"
+    Type: String
+    Default: "aks-datalake-gold"
+  IoTAGlueDB:
+    Description: "Glue DB to host metadata for the IoT Analytics dataset written to S3"
+    Type: String
+    Default: "aks_datalake_iota_glue_db"
+  IoTAGlueTable:
+    Description: "Glue table to write the necessary schema/metadata of the IoT Analytics dataset content written to S3 for Athena to query"
+    Type: String
+    Default: "aks_device_telemetry_stats"
+  DataLakeGoldGlueDB:
+    Description: "Glue DB to host metadata for the device specs table"
+    Type: String
+    Default: "aks_datalake_gold_glue_db"
+  DataLakeGoldDeviceSpecsGlueTable:
+    Description: "Glue catalog table to point to the device specification file on S3 (your existing data lake)"
+    Type: String
+    Default: "aks_device_specs"  
+Resources:
+  CreateRawBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: 
+        Ref: DataLakeRawIoTAChannelS3Bucket
+      BucketEncryption:
+        ServerSideEncryptionConfiguration: 
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  CreateSilverBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: 
+        Ref: DataLakeSilverIoTADatastoreS3Bucket
+      BucketEncryption:
+        ServerSideEncryptionConfiguration: 
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  CreateGoldBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: 
+        Ref: DataLakeGoldIoTADatasetS3Bucket
+      BucketEncryption:
+        ServerSideEncryptionConfiguration: 
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  CreateDataLakeGoldBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: 
+        Ref: DataLakeGoldS3Bucket
+      BucketEncryption:
+        ServerSideEncryptionConfiguration: 
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  DataLakeSilverIoTADatastoreBucketPolicy: 
+    Type: AWS::S3::BucketPolicy
+    DependsOn: CreateSilverBucket
+    Properties: 
+        Bucket: 
+          Ref: DataLakeSilverIoTADatastoreS3Bucket
+        PolicyDocument: 
+          Statement: 
+            - 
+              Principal:
+                Service: 
+                  - iotanalytics.amazonaws.com
+              Action: 
+                - "s3:GetBucketLocation"
+                - "s3:GetObject"
+                - "s3:ListBucket"
+                - "s3:ListBucketMultipartUploads"
+                - "s3:ListMultipartUploadParts"
+                - "s3:AbortMultipartUpload"
+                - "s3:PutObject"
+              Effect: "Allow"
+              Resource: 
+                - Fn::Join:
+                    - ""
+                    - - 'arn:aws:s3:::'
+                      - Ref: DataLakeSilverIoTADatastoreS3Bucket
+                - Fn::Join:
+                    - ""
+                    - - 'arn:aws:s3:::'
+                      - Ref: DataLakeSilverIoTADatastoreS3Bucket
+                      - '/*'
+  DemoIoTACMSBIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      "RoleName": "iota_cmsb_role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: 
+              - iot.amazonaws.com
+              - iotanalytics.amazonaws.com
+              - glue.amazonaws.com
+          Action: 
+            - sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AWSGlueConsoleFullAccess
+      - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+      - PolicyName: "iota_batchputmessage_policy"
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: "Allow"
+            Action: "iotanalytics:BatchPutMessage"
+            Resource: "*"
+      - PolicyName: "demo_iota_s3_readwrite_policy"
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: "Allow"
+            Action:
+            - "s3:PutObject"
+            - "s3:GetObject"
+            - "s3:ListBucket"
+            Resource:
+              - Fn::Join:
+                 - ""
+                 - - 'arn:aws:s3:::'
+                   - Ref: DataLakeRawIoTAChannelS3Bucket
+              - Fn::Join:
+                 - ""
+                 - - 'arn:aws:s3:::'
+                   - Ref: DataLakeRawIoTAChannelS3Bucket
+                   - '/*'
+              - Fn::Join:
+                 - ""
+                 - - 'arn:aws:s3:::'
+                   - Ref: DataLakeSilverIoTADatastoreS3Bucket
+              - Fn::Join:
+                 - ""
+                 - - 'arn:aws:s3:::'
+                   - Ref: DataLakeSilverIoTADatastoreS3Bucket
+                   - '/*'
+              - Fn::Join:
+                 - ""
+                 - - 'arn:aws:s3:::'
+                   - Ref: DataLakeGoldIoTADatasetS3Bucket
+              - Fn::Join:
+                 - ""
+                 - - 'arn:aws:s3:::'
+                   - Ref: DataLakeGoldIoTADatasetS3Bucket
+                   - '/*'          
+  CreateIoTAGlueDB:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId:
+        Ref: AWS::AccountId
+      DatabaseInput: 
+        Name:
+          Ref: IoTAGlueDB
+  CreateIoTAGlueTable:
+    Type: AWS::Glue::Table
+    DependsOn: CreateIoTAGlueDB
+    Properties:
+      CatalogId:
+        Ref: AWS::AccountId
+      DatabaseName:
+        Ref: IoTAGlueDB
+      TableInput:
+         Name:
+           Ref: IoTAGlueTable
+         StorageDescriptor:
+           Columns:
+             - Name: "dtts"
+               Type: "string"
+             - Name: "deviceid"
+               Type: "string"
+             - Name: "avg_temp"
+               Type: "string"
+             - Name: "avg_flow"
+               Type: "string"  
+             - Name: "avg_humidity"
+               Type: "string"
+             - Name: "avg_vibration"
+               Type: "string"
+           Location:
+             Fn::Join:
+               - ""
+               - - 's3://'
+                 - Ref: DataLakeGoldIoTADatasetS3Bucket
+                 - '/'
+                 - Ref: IoTAGlueDB
+                 - '/'
+                 - Ref: IoTAGlueTable
+           InputFormat: "org.apache.hadoop.mapred.TextInputFormat"
+           OutputFormat: "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
+           Compressed: false
+           SerdeInfo:
+             SerializationLibrary: "org.apache.hadoop.hive.serde2.OpenCSVSerde"      
+             Parameters:
+               separatorChar: ","
+         Parameters:
+           classification: "csv"
+           skip.header.line.count: "1"
+  CreateDataLakeGoldGlueDB:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId:
+        Ref: AWS::AccountId
+      DatabaseInput: 
+        Name:
+          Ref: DataLakeGoldGlueDB
+  CreateDataLakeGoldDeviceSpecsGlueTable:
+    Type: AWS::Glue::Table
+    DependsOn: CreateDataLakeGoldGlueDB
+    Properties:
+      CatalogId:
+        Ref: AWS::AccountId
+      DatabaseName:
+        Ref: DataLakeGoldGlueDB
+      TableInput:
+         Name:
+           Ref: DataLakeGoldDeviceSpecsGlueTable
+         StorageDescriptor:
+           Columns:
+             - Name: "deviceid"
+               Type: "string"
+             - Name: "manufacturer"
+               Type: "string"
+             - Name: "weight"
+               Type: "string"
+             - Name: "battery"
+               Type: "string"
+             - Name: "battery_life"
+               Type: "string"  
+             - Name: "min_temp_c"
+               Type: "bigint"
+             - Name: "max_temp_c"
+               Type: "bigint"
+             - Name: "min_humidity"
+               Type: "bigint"
+             - Name: "max_humidity"
+               Type: "bigint"
+           Location:
+             Fn::Join:
+               - ""
+               - - 's3://'
+                 - Ref: DataLakeGoldS3Bucket
+                 - '/'
+                 - Ref: DataLakeGoldGlueDB
+                 - '/'
+                 - Ref: DataLakeGoldDeviceSpecsGlueTable
+           InputFormat: "org.apache.hadoop.mapred.TextInputFormat"
+           OutputFormat: "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
+           Compressed: false
+           SerdeInfo:
+             SerializationLibrary: "org.apache.hadoop.hive.serde2.OpenCSVSerde"      
+             Parameters:
+               separatorChar: ","
+               quoteChar: "\""
+         Parameters:
+           classification: "csv"
+           skip.header.line.count: "1"
+Outputs:
+  DemoIoTACMSBIAMRoleArn:
+    Description: "Execution role for the random string generator for Redshift master user password"
+    Value:
+      Fn::GetAtt:
+      - DemoIoTACMSBIAMRole
+      - Arn
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}-DemoIoTACMSBIAMRoleArn"
