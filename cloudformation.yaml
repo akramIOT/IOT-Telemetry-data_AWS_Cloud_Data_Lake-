@@ -5,35 +5,35 @@ Parameters:
   DataLakeRawIoTAChannelS3Bucket:
     Description: "S3 bucket for IoT Analytics Channel"
     Type: String
-    Default: "aks-datalake-raw-iota-channel"
+    Default: "akr-datalake-raw-iota-channel"
   DataLakeSilverIoTADatastoreS3Bucket:
     Description: "S3 bucket for IoT Analytics Data store"
     Type: String
-    Default: "aks-datalake-silver-iota-datastore"
+    Default: "akr-datalake-silver-iota-datastore"
   DataLakeGoldIoTADatasetS3Bucket:
     Description: "S3 bucket for IoT Analytics Data set"
     Type: String
-    Default: "aks-datalake-gold-iota-dataset"
+    Default: "akr-datalake-gold-iota-dataset"
   DataLakeGoldS3Bucket:
     Description: "S3 bucket in your existing data lake"
     Type: String
-    Default: "aks-datalake-gold"
+    Default: "akr-datalake-gold"
   IoTAGlueDB:
     Description: "Glue DB to host metadata for the IoT Analytics dataset written to S3"
     Type: String
-    Default: "aks_datalake_iota_glue_db"
+    Default: "akr_datalake_iota_glue_db"
   IoTAGlueTable:
     Description: "Glue table to write the necessary schema/metadata of the IoT Analytics dataset content written to S3 for Athena to query"
     Type: String
-    Default: "aks_device_telemetry_stats"
+    Default: "akr_device_telemetry_stats"
   DataLakeGoldGlueDB:
     Description: "Glue DB to host metadata for the device specs table"
     Type: String
-    Default: "aks_datalake_gold_glue_db"
+    Default: "akr_datalake_gold_glue_db"
   DataLakeGoldDeviceSpecsGlueTable:
     Description: "Glue catalog table to point to the device specification file on S3 (your existing data lake)"
     Type: String
-    Default: "aks_device_specs"  
+    Default: "akr_device_specs"  
 Resources:
   CreateRawBucket:
     Type: AWS::S3::Bucket
