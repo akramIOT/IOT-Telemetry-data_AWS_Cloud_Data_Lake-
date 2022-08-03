@@ -1,3 +1,10 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sun Apr 24 12:31:12 2022
+@author: Akram Sheriff
+MQTT  based  Publish  Subscribe modelling of data from a local linux machine running this  script  to AWS  IOT Core.
+
+"""
 
 from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTClient
 import logging
