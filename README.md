@@ -25,10 +25,6 @@ C) Any Cisco Catalyst hardware supporting IOX_CAF  and AWS  Greengrass SDK  coul
 ![aws_iot_cloud_data_lake_architecture_with_mqtt_based_iot_telemetry_data](https://user-images.githubusercontent.com/21118209/182935437-6e72613f-4568-4f33-84e7-ae0fbba7f388.png)
 
 
-
-![DEVNET  ZONE](https://user-images.githubusercontent.com/21118209/182970869-3e795a50-9dd9-4fa7-91bf-ae6c12ca2729.jpeg)
-
-
 Prerequisites for this Project:
 ================================
 
