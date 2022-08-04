@@ -16,7 +16,11 @@ On 2022-05-30, support for Python 3.6 was ended. This follows the Python Softwar
 https://aws.amazon.com/blogs/developer/python-support-policy-updates-for-aws-sdks-and-tools/
 
 Here is the  illustration of the  Complete architectural implementation of the AWS Cloud IOT  Data lake with IOT telemetry data coming from MQTT Client's
-running on Cisco IOT  gateways.
+running on Cisco IOT  gateways. 
+
+A) (IR1101 , IR829, IR 1800  series Cisco IOT  gateways could be used to run the MQTT Client) or 
+B) A linux machine or Raspberry PI could be used to run a vanilla  MQTT Client  (code present in this repository) on it. 
+C) Any Cisco Catalyst hardware supporting IOX_CAF  and AWS  Greengrass SDK  could be also leveraged  - Reference in link below.  https://developer.cisco.com/ecosystem/cpp/solutions/177022/
 
 ![aws_iot_cloud_data_lake_architecture_with_mqtt_based_iot_telemetry_data](https://user-images.githubusercontent.com/21118209/182935437-6e72613f-4568-4f33-84e7-ae0fbba7f388.png)
 
