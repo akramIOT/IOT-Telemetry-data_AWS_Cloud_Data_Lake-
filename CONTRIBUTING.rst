@@ -4,6 +4,7 @@ A good pull request  with all details:
 
 
 - Is the  MQTT  Client running on  Cisco IOT  gateway or some other  hardware
+- Is  Cisco Edge intelligence /EI software used - version, IOT gateway Platform IOS or IOS-XE Version.
 - Name/type of  hardware, version of  MQTT (3.x or  5.x), OS  type etc.
 -  Is clear.
 -  Works across all supported versions of Python.
