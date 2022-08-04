@@ -3,7 +3,7 @@
 
 #!/bin/bash
 
-mqtttopic='iota/topic/myhome_raspberrypi'
+mqtttopic='iota/topic/iot_data_lake'
 iterations=1000
 wait=5
 region='us-east-1'
