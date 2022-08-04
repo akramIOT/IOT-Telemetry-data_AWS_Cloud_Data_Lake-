@@ -26,6 +26,9 @@ C) Any Cisco Catalyst hardware supporting IOX_CAF  and AWS  Greengrass SDK  coul
 
 
 
+![DEVNET  ZONE](https://user-images.githubusercontent.com/21118209/182970869-3e795a50-9dd9-4fa7-91bf-ae6c12ca2729.jpeg)
+
+
 Prerequisites for this Project:
 ================================
 
