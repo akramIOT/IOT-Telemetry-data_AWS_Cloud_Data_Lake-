@@ -1,3 +1,6 @@
+#Sample  reference  script for  generating data which can be  published by MQTT client to the  Cloud where  MQTT broker is running
+#Change the AWS  region, MQTT  Topic name and other parameters as per  your  requirements. 
+
 #!/bin/bash
 
 mqtttopic='iota/topic/myhome_raspberrypi'
