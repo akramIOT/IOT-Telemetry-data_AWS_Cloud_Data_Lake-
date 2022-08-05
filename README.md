@@ -19,7 +19,9 @@ Here is the  illustration of the  Complete architectural implementation of the A
 running on Cisco IOT  gateways. 
 
 A) (IR1101 , IR829, IR 1800  series Cisco IOT  gateways could be used to run the MQTT Client) or 
+
 B) A linux machine or Raspberry PI could be used to run a vanilla  MQTT Client  (code present in this repository) on it. 
+
 C) Any Cisco Catalyst hardware supporting IOX_CAF  and AWS  Greengrass SDK  could be also leveraged  - Reference in link below.  https://developer.cisco.com/ecosystem/cpp/solutions/177022/
 
 ![aws_iot_cloud_data_lake_architecture_with_mqtt_based_iot_telemetry_data](https://user-images.githubusercontent.com/21118209/182935437-6e72613f-4568-4f33-84e7-ae0fbba7f388.png)
