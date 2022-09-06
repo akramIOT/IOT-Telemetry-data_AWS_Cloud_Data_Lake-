@@ -6,7 +6,7 @@
         {
             "iotAnalytics": {
                 "channelName": "akr_datalake_raw_iota_channel",
-                "roleArn": "arn:aws:iam::888093449492:role/iota_cmsb_role"
+                "roleArn": "arn:aws:iam::xxxxxxxxxxxx:role/iota_cmsb_role"
             }
         }
     ]
