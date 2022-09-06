@@ -18,7 +18,7 @@
                         "tableName": "akr_device_telemetry_stats",
                         "databaseName": "akr_datalake_iota_glue_db"
                     },
-                    "roleArn": "arn:aws:iam::888093449492:role/iota_cmsb_role"
+                    "roleArn": "arn:aws:iam::xxxxxxxxxxxxxx:role/iota_cmsb_role"
                 }
             }
         }
