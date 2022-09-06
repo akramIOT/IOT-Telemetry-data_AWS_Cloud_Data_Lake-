@@ -4,7 +4,7 @@
         "customerManagedS3": {
             "bucket": "akr-datalake-silver-iota-datastore",
             "keyPrefix": "myhome_raspberrypi/",
-            "roleArn": "arn:aws:iam::888093449492:role/iota_cmsb_role"
+            "roleArn": "arn:aws:iam::xxxxxxxxxxx:role/iota_cmsb_role"
         }
     }
 }
