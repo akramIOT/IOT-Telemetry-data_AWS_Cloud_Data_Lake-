@@ -1,6 +1,6 @@
 {
     "Name": "akr_datalake_silver_iota_datastore_glue_crawler",
-    "Role": "arn:aws:iam::888093449492:role/iota_cmsb_role",
+    "Role": "arn:aws:iam::xxxxxxxxxxx:role/iota_cmsb_role",
     "DatabaseName": "akr_datalake_iota_glue_db",
     "Description": "",
     "Targets": {
