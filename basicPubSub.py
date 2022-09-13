@@ -2,8 +2,8 @@
 """
 Created on Sun Apr 24 12:31:12 2022
 @author: Akram Sheriff
-MQTT  based  Publish  Subscribe modelling of data from a local linux machine running this  script  to AWS  IOT Core.
-
+MQTT Client  Publish  Subscribe modelling of data from a local linux machine running this  script   or  on  IR1101(Cisco gateway) to publish the data
+to  AWS  IOT Core (MQTT  broker is running).
 """
 
 from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTClient
