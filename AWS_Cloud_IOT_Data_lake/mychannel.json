@@ -4,7 +4,7 @@
         "customerManagedS3": {
             "bucket": "sagemaker-us-east-1-xxxxxxxxxxx",
             "keyPrefix": "myhome_raspberrypi/",
-            "roleArn": "arn:aws:iam::888093449492:role/iota_cmsb_role"
+            "roleArn": "arn:aws:iam::xxxxxxxxxxx:role/iota_cmsb_role"
         }
     }
 }
